@@ -316,6 +316,10 @@ def main():
     parser.add_argument("--prb-count", type=int, default=None)
     parser.add_argument("--no-add-z", action="store_true")
     parser.add_argument("--no-add-step", action="store_true")
+    parser.add_argument("--add-n-ue", action="store_true", help="Add population-aware n_ue feature")
+    parser.add_argument("--rbar-normalize", choices=["log", "sigmoid"], default="log", help="Rbar normalization method")
+    parser.add_argument("--rbar-scale", type=float, default=1.0, help="Scale for sigmoid Rbar normalization")
+    parser.add_argument("--n-ue-ref", type=float, default=100.0, help="Reference UE count for n_ue feature")
     parser.add_argument("--uncertainty", action="store_true")
     parser.add_argument("--use-nll", action="store_true")
     parser.add_argument("--early-stop-patience", type=int, default=0,
@@ -611,6 +615,7 @@ def train_model(args) -> tuple:
 
     model_add_z = bool(meta_add_z or add_z)
     model_add_step = bool(meta_add_step or add_step)
+    model_add_n_ue = bool(args.add_n_ue)
     meta_out = {
         "model_kind": "isab",
         "feature_dim": int(feat_dim),
@@ -626,6 +631,10 @@ def train_model(args) -> tuple:
         "use_nll": bool(args.use_nll),
         "add_z": model_add_z,
         "add_step": model_add_step,
+        "add_n_ue": model_add_n_ue,
+        "rbar_normalize": str(args.rbar_normalize),
+        "rbar_scale": float(args.rbar_scale),
+        "n_ue_ref": float(args.n_ue_ref),
         "prb_count": int(prb_count),
         "mean": None if mean is None else mean.tolist(),
         "std": None if std is None else std.tolist(),

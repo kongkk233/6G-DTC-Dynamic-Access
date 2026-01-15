@@ -78,6 +78,10 @@ def main():
     parser.add_argument("--num-seeds", type=int, default=1, help="Number of seeds to run")
     parser.add_argument("--add-z", action="store_true", help="Append z/Z to features")
     parser.add_argument("--add-step", action="store_true", help="Append step/Z to features")
+    parser.add_argument("--add-n-ue", action="store_true", help="Append n_ue feature for population awareness")
+    parser.add_argument("--rbar-normalize", choices=["log", "sigmoid"], default="log", help="Rbar normalization method")
+    parser.add_argument("--rbar-scale", type=float, default=1.0, help="Scale for sigmoid Rbar normalization")
+    parser.add_argument("--n-ue-ref", type=float, default=100.0, help="Reference UE count for n_ue feature")
     parser.add_argument("--no-progress", action="store_true")
     args = parser.parse_args()
 
@@ -104,6 +108,10 @@ def main():
     cfg["nsgbs_window"] = int(max(1, args.window))
     cfg["nsgbs_add_z"] = bool(args.add_z)
     cfg["nsgbs_add_step"] = bool(args.add_step)
+    cfg["nsgbs_add_n_ue"] = bool(args.add_n_ue)
+    cfg["nsgbs_rbar_normalize"] = str(args.rbar_normalize)
+    cfg["nsgbs_rbar_scale"] = float(args.rbar_scale)
+    cfg["nsgbs_n_ue_ref"] = float(args.n_ue_ref)
 
     if args.seed is not None:
         seeds = [int(args.seed)]
@@ -111,7 +119,7 @@ def main():
         seeds = list(range(int(args.seed_start), int(args.seed_start) + int(args.num_seeds)))
 
     dataset = []
-    from main import run_once
+    from main import run_once, run_constellation
 
     for seed in seeds:
         cfg_run = cfg.copy()
@@ -123,7 +131,10 @@ def main():
                 break
             cfg_run["nsgbs_collect_max_samples"] = remaining
         print(f"[NS-GBS] running seed={seed} (samples={len(dataset)})")
-        run_once(cfg_run)
+        if cfg_run.get("enable_constellation", False):
+            run_constellation(cfg_run)
+        else:
+            run_once(cfg_run)
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -158,6 +169,10 @@ def main():
         "stride": int(args.stride),
         "add_z": bool(args.add_z),
         "add_step": bool(args.add_step),
+        "add_n_ue": bool(args.add_n_ue),
+        "rbar_normalize": str(args.rbar_normalize),
+        "rbar_scale": float(args.rbar_scale),
+        "n_ue_ref": float(args.n_ue_ref),
         "seeds": seeds,
         "config": to_jsonable(cfg),
     }
