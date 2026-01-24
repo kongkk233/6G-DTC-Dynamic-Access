@@ -25,6 +25,9 @@ from plot_utils import (
     ci_95, save_fig, add_subplot_label, format_scenario_name
 )
 
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['font.serif'] = ['Times New Roman']
+plt.rcParams['mathtext.fontset'] = 'stix'
 
 def main():
     parser = argparse.ArgumentParser(
@@ -60,9 +63,17 @@ def main():
     df = pd.read_csv(csv_path)
     print(f"Loaded {len(df)} rows from {csv_path}")
 
+    # Filter to single scenarios only
+    df = df[df['scenario'].str.contains('single')]
+
     # Get unique scenarios and methods
     scenarios = df['scenario'].unique().tolist()
     methods = [m for m in METHOD_ORDER if m in df['method'].unique()]
+
+    # Local scenario name mapping (without "single" designation)
+    def format_scenario_name_local(scenario):
+        mapping = {'toronto_single': 'Toronto', 'shanghai_single': 'Shanghai'}
+        return mapping.get(scenario, scenario)
 
     print(f"Scenarios: {scenarios}")
     print(f"Methods: {methods}")
@@ -101,7 +112,7 @@ def main():
                capsize=2, error_kw={'linewidth': 0.8})
 
     ax.set_xticks(x)
-    ax.set_xticklabels([format_scenario_name(s) for s in scenarios], rotation=15, ha='right')
+    ax.set_xticklabels([format_scenario_name_local(s) for s in scenarios], rotation=15, ha='right')
     ax.set_ylabel('Average SE (bits/s/Hz)')
     ax.set_xlabel('Scenario')
     ax.legend(loc='upper right', frameon=False, fontsize=8)
@@ -167,10 +178,10 @@ def main():
 
     ax.axhline(y=0, color='gray', linestyle='--', linewidth=0.8, alpha=0.7)
     ax.set_xticks(x)
-    ax.set_xticklabels([format_scenario_name(s) for s in scenarios], rotation=15, ha='right')
+    ax.set_xticklabels([format_scenario_name_local(s) for s in scenarios], rotation=15, ha='right')
     ax.set_ylabel('Gain vs 3GPP Baseline (%)')
     ax.set_xlabel('Scenario')
-    ax.legend(loc='upper right', frameon=False, fontsize=8)
+    ax.legend(loc='best', frameon=False, fontsize=8)
     add_subplot_label(ax, '(b)')
 
     # =========================================================================

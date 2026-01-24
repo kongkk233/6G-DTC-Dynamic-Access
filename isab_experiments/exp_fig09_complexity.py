@@ -101,13 +101,20 @@ def run_experiment(cfg, method, model_mlp, model_isab):
     T = cfg.get("T", 1000)
 
     # Extract NS-GBS stats if available
-    nsgbs_stats = result.get("nsgbs_stats", {})
+    nsgbs_stats = result.get("nsgbs_stats", {}) or {}
     score_calls = nsgbs_stats.get("score_calls", 0)
     score_time_sec = nsgbs_stats.get("score_time_sec", 0.0)
-    avg_ms_per_call = nsgbs_stats.get("avg_score_ms_per_call", 0.0)
+    avg_ms_per_call = nsgbs_stats.get("avg_score_ms_per_call", None)
+    if avg_ms_per_call is None:
+        avg_ms_per_call = (float(score_time_sec) * 1000.0) / float(score_calls) if int(score_calls) > 0 else 0.0
+    avg_us_per_action = nsgbs_stats.get("avg_score_us_per_action", None)
+    if avg_us_per_action is None:
+        actions_total = int(nsgbs_stats.get("actions_total", 0) or 0)
+        avg_us_per_action = (float(score_time_sec) * 1e6) / float(actions_total) if actions_total > 0 else 0.0
 
     # Compute per-TTI timing
     ms_per_tti = (total_time_sec * 1000) / T if T > 0 else 0.0
+    score_ms_per_tti = (float(score_time_sec) * 1000.0) / float(T) if T > 0 else 0.0
 
     return {
         "avg_se": float(result.get("avg_se_radiomap", 0.0)),
@@ -116,7 +123,9 @@ def run_experiment(cfg, method, model_mlp, model_isab):
         "score_calls": int(score_calls),
         "score_time_sec": float(score_time_sec),
         "ms_per_call": float(avg_ms_per_call),
+        "us_per_action": float(avg_us_per_action),
         "ms_per_tti": float(ms_per_tti),
+        "score_ms_per_tti": float(score_ms_per_tti),
     }
 
 
@@ -152,6 +161,12 @@ def main():
         type=int,
         default=None,
         help="Override number of UEs"
+    )
+    parser.add_argument(
+        "--nsgbs-max-actions",
+        type=int,
+        default=None,
+        help="Optional: limit #candidate actions scored per step (reduces inference cost)"
     )
     parser.add_argument(
         "--methods",
@@ -230,6 +245,12 @@ def main():
                     cfg["N_UE"] = args.N_UE
                 cfg["seed"] = seed
                 cfg["show_progress"] = False
+                # Timing runs should not write large JSON reports to disk.
+                cfg["write_json_report"] = False
+                # Make the measured device explicit and consistent with the reported label.
+                cfg["nsgbs_device"] = device
+                if args.nsgbs_max_actions is not None:
+                    cfg["nsgbs_max_actions"] = int(args.nsgbs_max_actions)
 
                 pbar.set_description(f"Fig09 [{method}/{seed}]")
 
@@ -245,7 +266,9 @@ def main():
                         "score_calls": result["score_calls"],
                         "score_time_sec": result["score_time_sec"],
                         "ms_per_call": result["ms_per_call"],
+                        "us_per_action": result["us_per_action"],
                         "ms_per_tti": result["ms_per_tti"],
+                        "score_ms_per_tti": result["score_ms_per_tti"],
                     })
                     pbar.set_postfix(
                         time=f"{result['total_time_sec']:.1f}s",
@@ -264,7 +287,8 @@ def main():
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     fieldnames = ["method", "device", "seed", "avg_se", "T", "total_time_sec",
-                  "score_calls", "score_time_sec", "ms_per_call", "ms_per_tti"]
+                  "score_calls", "score_time_sec", "ms_per_call", "us_per_action",
+                  "score_ms_per_tti", "ms_per_tti"]
     with open(out_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -279,8 +303,14 @@ def main():
         method_rows = [r for r in rows if r["method"] == method]
         if method_rows:
             avg_ms_tti = np.mean([r["ms_per_tti"] for r in method_rows])
+            avg_inf_ms_tti = np.mean([r.get("score_ms_per_tti", 0.0) for r in method_rows])
+            avg_ms_call = np.mean([r.get("ms_per_call", 0.0) for r in method_rows])
             avg_se = np.mean([r["avg_se"] for r in method_rows])
-            print(f"  {method}: {avg_ms_tti:.2f} ms/TTI, SE={avg_se:.4f}")
+            print(
+                f"  {method}: e2e={avg_ms_tti:.2f} ms/TTI, "
+                f"infer={avg_inf_ms_tti:.2f} ms/TTI, "
+                f"ms/call={avg_ms_call:.3f}, SE={avg_se:.4f}"
+            )
 
     return 0
 

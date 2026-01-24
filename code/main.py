@@ -364,17 +364,48 @@ def build_time_variation_if_enabled(config: Dict,
     snr_wb_time: list = []
     tau_time: list = []
     fd_time: list = []
-    R_t = R_xyz_dbm.copy()
+    # Keep a drifted base map and apply flicker as a stationary (per-TTI) perturbation.
+    # IMPORTANT: do not accumulate flicker over time (random walk), which would make
+    # interference variance grow with t and artificially inflate SE.
+    R_base_t = R_xyz_dbm.copy()
     if orbit_model is None:
         orbit_model = OrbitModel(config, R_xyz_dbm.shape[0], R_xyz_dbm.shape[1]) if config.get("enable_orbit_dynamics", False) else None
 
     # DL-only: UL-specific pre-compensation and TA models removed.
     for t in range(T):
-        if t > 0:
-            if vx or vy:
-                R_t = np.roll(R_t, shift=(int(vx), int(vy), 0), axis=(0, 1, 2))
-            if flicker > 0.0:
-                R_t = R_t + rng.normal(0.0, flicker, size=R_t.shape)
+        if t > 0 and (vx or vy):
+            R_base_t = np.roll(R_base_t, shift=(int(vx), int(vy), 0), axis=(0, 1, 2))
+        if flicker > 0.0:
+            # Interference flicker is modeled as a *wideband* (PRB-correlated) perturbation by default.
+            # Rationale: per-PRB i.i.d. flicker can create artificial frequency diversity that an
+            # oracle-per-PRB scheduler exploits, leading to SE increasing with "flicker std".
+            kind = str(config.get("rm_flicker_kind", "global")).lower().strip()
+            dist = str(config.get("rm_flicker_dist", "rectified")).lower().strip()
+            if dist in ("gaussian", "normal", "signed"):
+                def sample_delta(shape):
+                    return rng.normal(0.0, flicker, size=shape)
+            elif dist in ("rectified", "relu", "positive"):
+                def sample_delta(shape):
+                    return np.maximum(0.0, rng.normal(0.0, flicker, size=shape))
+            elif dist in ("abs", "absolute", "half_normal"):
+                def sample_delta(shape):
+                    return np.abs(rng.normal(0.0, flicker, size=shape))
+            else:
+                raise ValueError(f"Unknown rm_flicker_dist '{dist}'.")
+            if kind in ("global", "scalar"):
+                R_t = R_base_t + float(sample_delta(None))
+            elif kind in ("pixel", "per_pixel", "xy", "wideband_xy"):
+                delta = sample_delta((R_base_t.shape[0], R_base_t.shape[1], 1))
+                R_t = R_base_t + delta
+            elif kind in ("prb", "per_prb", "z"):
+                delta = sample_delta((1, 1, R_base_t.shape[2]))
+                R_t = R_base_t + delta
+            elif kind in ("element", "per_element", "xyz"):
+                R_t = R_base_t + sample_delta(R_base_t.shape)
+            else:
+                raise ValueError(f"Unknown rm_flicker_kind '{kind}'.")
+        else:
+            R_t = R_base_t
 
         # Predictive schedule metric under imperfect map (optional, matches original gating)
         cap_pred_t = cap_wb_pred_t = snr_lin_pred_t = snr_lin_wb_pred_t = None
@@ -867,6 +898,13 @@ def pf_schedule_radiomap_blocks(
         cfg["nsgbs_stats_out"] = stats_out
     stats = {"steps": 0, "actions_total": 0, "score_calls": 0, "score_time_sec": 0.0} if collect_stats else None
     nsgbs_score_error_printed = False
+    nsgbs_max_actions = cfg.get("nsgbs_max_actions", None)
+    try:
+        nsgbs_max_actions = None if nsgbs_max_actions is None else int(nsgbs_max_actions)
+        if nsgbs_max_actions is not None and nsgbs_max_actions <= 0:
+            nsgbs_max_actions = None
+    except Exception:
+        nsgbs_max_actions = None
 
     N_UE, Z = cap.shape
     rng = np.random.default_rng(0) if rng is None else rng
@@ -1287,6 +1325,17 @@ def pf_schedule_radiomap_blocks(
             actions = None
             if use_nsgbs and (nsgbs_scorer is not None):
                 actions = list(iter_actions())
+                # Optional pruning to reduce model inference cost: keep only top-K actions
+                # using the heuristic PF metric as a cheap filter.
+                if actions and (nsgbs_max_actions is not None) and (len(actions) > nsgbs_max_actions):
+                    try:
+                        prune_scores = np.asarray([score_action_heuristic(a) for a in actions], dtype=float)
+                        k = int(nsgbs_max_actions)
+                        idx = np.argpartition(prune_scores, -k)[-k:]
+                        idx = idx[np.argsort(prune_scores[idx])[::-1]]
+                        actions = [actions[int(j)] for j in idx]
+                    except Exception:
+                        actions = actions[: int(nsgbs_max_actions)]
                 if collect_stats:
                     stats["actions_total"] += len(actions)
                 if actions:
@@ -1566,7 +1615,20 @@ def pf_schedule_radiomap_blocks(
                 harq_mgr.on_scheduled(scheduled)
 
     avg_sum_rate_per_prb = sum_rate / (T * Z)
-    if collect_stats and stats_out is not None:
+    if collect_stats and stats_out is not None and stats is not None:
+        # Derived NS-GBS timing stats (for complexity plots)
+        try:
+            score_calls = int(stats.get("score_calls", 0) or 0)
+            actions_total = int(stats.get("actions_total", 0) or 0)
+            score_time_sec = float(stats.get("score_time_sec", 0.0) or 0.0)
+            t_total = int(T) if T else 0
+            stats["avg_score_ms_per_call"] = (score_time_sec * 1000.0) / score_calls if score_calls > 0 else 0.0
+            stats["avg_score_us_per_action"] = (score_time_sec * 1e6) / actions_total if actions_total > 0 else 0.0
+            stats["score_ms_per_tti"] = (score_time_sec * 1000.0) / t_total if t_total > 0 else 0.0
+            stats["actions_per_score_call"] = (float(actions_total) / float(score_calls)) if score_calls > 0 else 0.0
+            stats["actions_per_tti"] = (float(actions_total) / float(t_total)) if t_total > 0 else 0.0
+        except Exception:
+            pass
         stats_out.clear()
         stats_out.update(stats)
     return avg_sum_rate_per_prb
@@ -2334,9 +2396,12 @@ def run_constellation(config: Dict) -> Dict:
     serving_trace = [] if include_trace else None
 
     # Time-varying Radio Map (optional)
-    R_t = R_xyz_dbm.copy()
+    R_base_t = R_xyz_dbm.copy()
+    R_t = R_base_t
     vx, vy = config.get("rm_drift_px", (0, 0))
     flicker = float(config.get("rm_flicker_db_std", 0.0))
+    flicker_kind = str(config.get("rm_flicker_kind", "global")).lower().strip()
+    flicker_dist = str(config.get("rm_flicker_dist", "rectified")).lower().strip()
     enable_tv = bool(config.get("enable_time_varying", False))
 
     # KPI accumulators
@@ -2355,11 +2420,35 @@ def run_constellation(config: Dict) -> Dict:
                      leave=leave_bar,
                      bar_format='{l_bar}{bar:30}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]')
     for t_idx in pbar_iter:
-        if t_idx > 0 and enable_tv:
-            if vx or vy:
-                R_t = np.roll(R_t, shift=(int(vx), int(vy), 0), axis=(0, 1, 2))
+        if enable_tv:
+            if t_idx > 0 and (vx or vy):
+                R_base_t = np.roll(R_base_t, shift=(int(vx), int(vy), 0), axis=(0, 1, 2))
             if flicker > 0.0:
-                R_t = R_t + rng.normal(0.0, flicker, size=R_t.shape)
+                if flicker_dist in ("gaussian", "normal", "signed"):
+                    def sample_delta(shape):
+                        return rng.normal(0.0, flicker, size=shape)
+                elif flicker_dist in ("rectified", "relu", "positive"):
+                    def sample_delta(shape):
+                        return np.maximum(0.0, rng.normal(0.0, flicker, size=shape))
+                elif flicker_dist in ("abs", "absolute", "half_normal"):
+                    def sample_delta(shape):
+                        return np.abs(rng.normal(0.0, flicker, size=shape))
+                else:
+                    raise ValueError(f"Unknown rm_flicker_dist '{flicker_dist}'.")
+                if flicker_kind in ("global", "scalar"):
+                    R_t = R_base_t + float(sample_delta(None))
+                elif flicker_kind in ("pixel", "per_pixel", "xy", "wideband_xy"):
+                    delta = sample_delta((R_base_t.shape[0], R_base_t.shape[1], 1))
+                    R_t = R_base_t + delta
+                elif flicker_kind in ("prb", "per_prb", "z"):
+                    delta = sample_delta((1, 1, R_base_t.shape[2]))
+                    R_t = R_base_t + delta
+                elif flicker_kind in ("element", "per_element", "xyz"):
+                    R_t = R_base_t + sample_delta(R_base_t.shape)
+                else:
+                    raise ValueError(f"Unknown rm_flicker_kind '{flicker_kind}'.")
+            else:
+                R_t = R_base_t
 
         cand = orbit.candidate_indices_at(t_idx)
         if not cand:

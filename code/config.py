@@ -81,6 +81,17 @@ CONFIG = {
     # --- Radio Map dynamics ---
     "enable_time_varying": True,
     "rm_flicker_db_std": 0.5,
+    # Flicker dimensionality:
+    # - "global": one wideband offset shared by all (x,y,z) each TTI (default; avoids artificial PRB diversity)
+    # - "pixel": one wideband offset per (x,y) each TTI, shared across PRBs
+    # - "prb": one offset per PRB each TTI, shared across space
+    # - "element": i.i.d. per (x,y,z) each TTI (can overstate exploitable diversity)
+    "rm_flicker_kind": "global",
+    # Flicker distribution:
+    # - "rectified" (default): add extra interference only (never below baseline)
+    # - "signed": symmetric N(0, std) in dB (can lead to counterintuitive SE increases)
+    # - "abs": |N(0, std)| in dB (always >0, stronger than rectified)
+    "rm_flicker_dist": "rectified",
     "rm_drift_px": (0, 0),
 }
 

@@ -74,10 +74,9 @@ def main():
     linestyles = {'B1_3GPP': ':', 'P1_MLP': '-', 'P2_ISAB': '--'}
 
     # =========================================================================
-    # Subplot (a): SE and 5%-tile throughput vs N_UE
+    # Subplot (a): SE vs N_UE
     # =========================================================================
     ax = axes[0]
-    ax2 = ax.twinx()
 
     # Use most common Z value for N_UE sweep
     default_z = df['Z'].mode().values[0] if len(df) > 0 else 51
@@ -92,13 +91,10 @@ def main():
 
         se_means = []
         se_cis = []
-        p5_means = []
-        p5_cis = []
 
         for n_ue in n_ue_values:
             subset = method_data[method_data['N_UE'] == n_ue]
             se_values = subset['avg_se'].dropna().values
-            p5_values = subset['pctl_5_tput'].dropna().values / 1e6  # Mbps
 
             if len(se_values) > 0:
                 se_means.append(np.mean(se_values))
@@ -107,36 +103,20 @@ def main():
                 se_means.append(np.nan)
                 se_cis.append(0)
 
-            if len(p5_values) > 0:
-                p5_means.append(np.mean(p5_values))
-                p5_cis.append(ci_95(p5_values))
-            else:
-                p5_means.append(np.nan)
-                p5_cis.append(0)
-
         se_means = np.array(se_means)
         se_cis = np.array(se_cis)
-        p5_means = np.array(p5_means)
-        p5_cis = np.array(p5_cis)
 
         color = COLORS.get(method, 'gray')
         marker = markers.get(method, 'o')
         linestyle = linestyles.get(method, '-')
         label = METHOD_LABELS.get(method, method)
 
-        # Plot SE on left axis
         ax.plot(n_ue_values, se_means, marker=marker, linestyle=linestyle, color=color,
-                label=f'{label} (SE)', linewidth=1.8, markersize=6)
+                label=label, linewidth=1.8, markersize=6)
         ax.fill_between(n_ue_values, se_means - se_cis, se_means + se_cis, color=color, alpha=0.15)
-
-        # Plot 5%-tile throughput on right axis (dashed, lighter)
-        ax2.plot(n_ue_values, p5_means, marker=marker, linestyle='--', color=color,
-                 linewidth=1.2, markersize=4, alpha=0.6)
 
     ax.set_xlabel('Number of UEs')
     ax.set_ylabel('Average SE (bits/s/Hz)')
-    ax2.set_ylabel('5%-tile Throughput (Mbps)', color='gray')
-    ax2.tick_params(axis='y', labelcolor='gray')
     ax.legend(loc='upper right', frameon=False, fontsize=8)
     ax.grid(True, alpha=0.3)
     add_subplot_label(ax, '(a)')

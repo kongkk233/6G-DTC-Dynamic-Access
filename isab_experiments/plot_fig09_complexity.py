@@ -4,8 +4,8 @@
 Plot for Figure 9: Runtime / Complexity / Deployability.
 
 Generates two subplots:
-(a) Bar chart: Scheduler time per TTI by method
-(b) Scatter plot: SE vs compute cost (ms per TTI)
+(a) Bar chart: End-to-end time per TTI and inference time per TTI by method
+(b) Scatter plot: SE vs end-to-end compute cost (ms per TTI), annotated with inference time
 """
 
 import argparse
@@ -67,37 +67,117 @@ def main():
     fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
 
     # =========================================================================
-    # Subplot (a): Bar chart - ms per TTI by method
+    # Subplot (a): Bar chart - end-to-end vs inference ms per TTI by method
     # =========================================================================
     ax = axes[0]
 
     x = np.arange(len(methods))
-    bar_width = 0.6
+    bar_width = 0.36
 
-    ms_means = []
-    ms_cis = []
+    e2e_means = []
+    e2e_cis = []
+    inf_means = []
+    inf_cis = []
+
+    # Inference time per TTI: prefer explicit column, otherwise compute from score_time_sec/T.
+    if "score_ms_per_tti" not in df.columns:
+        if ("score_time_sec" in df.columns) and ("T" in df.columns):
+            df = df.copy()
+            df["score_ms_per_tti"] = (pd.to_numeric(df["score_time_sec"], errors="coerce") * 1000.0) / pd.to_numeric(df["T"], errors="coerce")
+        else:
+            df = df.copy()
+            df["score_ms_per_tti"] = 0.0
 
     for method in methods:
         method_data = df[df['method'] == method]
-        ms_values = method_data['ms_per_tti'].dropna().values
+        e2e_values = method_data['ms_per_tti'].dropna().values
+        inf_values = method_data['score_ms_per_tti'].dropna().values
 
-        if len(ms_values) > 0:
-            ms_means.append(np.mean(ms_values))
-            ms_cis.append(ci_95(ms_values))
+        if len(e2e_values) > 0:
+            e2e_means.append(np.mean(e2e_values))
+            e2e_cis.append(ci_95(e2e_values))
         else:
-            ms_means.append(0)
-            ms_cis.append(0)
+            e2e_means.append(0)
+            e2e_cis.append(0)
+
+        if len(inf_values) > 0:
+            inf_means.append(np.mean(inf_values))
+            inf_cis.append(ci_95(inf_values))
+        else:
+            inf_means.append(0)
+            inf_cis.append(0)
 
     colors_bars = [COLORS.get(m, f'C{i}') for i, m in enumerate(methods)]
 
-    bars = ax.bar(x, ms_means, bar_width, yerr=ms_cis,
-                  color=colors_bars, edgecolor='black', linewidth=0.5,
-                  capsize=4, error_kw={'linewidth': 1.0})
+    offset = bar_width / 2.0 + 0.02
+    bars_e2e = ax.bar(
+        x - offset,
+        e2e_means,
+        bar_width,
+        yerr=e2e_cis,
+        color=colors_bars,
+        edgecolor="black",
+        linewidth=0.5,
+        capsize=4,
+        error_kw={"linewidth": 1.0},
+        label="End-to-end",
+    )
+    bars_inf = ax.bar(
+        x + offset,
+        inf_means,
+        bar_width,
+        yerr=inf_cis,
+        color=colors_bars,
+        alpha=0.35,
+        edgecolor="black",
+        linewidth=0.5,
+        capsize=4,
+        error_kw={"linewidth": 1.0},
+        label="Model inference",
+    )
 
     # Add value labels on bars
-    for i, (bar, mean) in enumerate(zip(bars, ms_means)):
-        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + ms_cis[i] + 0.5,
-                f'{mean:.1f}', ha='center', va='bottom', fontsize=9)
+    for i, (bar, mean) in enumerate(zip(bars_e2e, e2e_means)):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + e2e_cis[i] + 0.5,
+            f"{mean:.1f}",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+    for i, (bar, mean) in enumerate(zip(bars_inf, inf_means)):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + inf_cis[i] + 0.5,
+            f"{mean:.1f}",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+
+    # Annotate model call rate and per-call latency (helps explain inference ms/TTI)
+    if ("score_calls" in df.columns) and ("T" in df.columns) and ("ms_per_call" in df.columns):
+        for i, method in enumerate(methods):
+            md = df[df["method"] == method]
+            try:
+                calls_per_tti = float(np.mean(pd.to_numeric(md["score_calls"], errors="coerce") / pd.to_numeric(md["T"], errors="coerce")))
+            except Exception:
+                calls_per_tti = 0.0
+            try:
+                ms_call = float(np.mean(pd.to_numeric(md["ms_per_call"], errors="coerce")))
+            except Exception:
+                ms_call = 0.0
+            if calls_per_tti > 0 and ms_call > 0:
+                ax.text(
+                    x[i],
+                    max(e2e_means[i], inf_means[i]) + max(e2e_cis[i], inf_cis[i]) + 6.0,
+                    f"{calls_per_tti:.1f} calls/TTI\n{ms_call:.2f} ms/call",
+                    ha="center",
+                    va="bottom",
+                    fontsize=7,
+                    color="black",
+                )
 
     ax.set_xticks(x)
     ax.set_xticklabels([METHOD_LABELS.get(m, m) for m in methods], rotation=15, ha='right')
@@ -105,6 +185,7 @@ def main():
     ax.set_ylabel('Time per TTI (ms)')
     ax.set_ylim(bottom=0)
     ax.grid(True, alpha=0.3, axis='y')
+    ax.legend(loc="best", frameon=False, fontsize=8)
     add_subplot_label(ax, '(a)')
 
     # =========================================================================
@@ -119,12 +200,26 @@ def main():
 
         ms_values = method_data['ms_per_tti'].dropna().values
         se_values = method_data['avg_se'].dropna().values
+        inf_values = method_data['score_ms_per_tti'].dropna().values
 
         if len(ms_values) > 0 and len(se_values) > 0:
             ms_mean = np.mean(ms_values)
             ms_std = np.std(ms_values) if len(ms_values) > 1 else 0
             se_mean = np.mean(se_values)
             se_std = np.std(se_values) if len(se_values) > 1 else 0
+            inf_mean = float(np.mean(inf_values)) if len(inf_values) > 0 else 0.0
+            calls_per_tti = 0.0
+            ms_call = 0.0
+            if ("score_calls" in method_data.columns) and ("T" in method_data.columns):
+                try:
+                    calls_per_tti = float(np.mean(pd.to_numeric(method_data["score_calls"], errors="coerce") / pd.to_numeric(method_data["T"], errors="coerce")))
+                except Exception:
+                    calls_per_tti = 0.0
+            if "ms_per_call" in method_data.columns:
+                try:
+                    ms_call = float(np.mean(pd.to_numeric(method_data["ms_per_call"], errors="coerce")))
+                except Exception:
+                    ms_call = 0.0
 
             color = COLORS.get(method, 'gray')
             marker = markers.get(method, 'o')
@@ -136,11 +231,17 @@ def main():
                        capsize=4, capthick=1.5, linewidth=1.5,
                        label=label, markeredgecolor='black', markeredgewidth=0.5)
 
-            # Add label next to point
-            ax.annotate(label, (ms_mean, se_mean), textcoords="offset points",
-                       xytext=(8, 5), fontsize=8, color=color)
+            # Add label next to point (include inference time per TTI)
+            ax.annotate(
+                f"{label}\ninf={inf_mean:.1f}ms\n{calls_per_tti:.1f} calls/TTI",
+                (ms_mean, se_mean),
+                textcoords="offset points",
+                xytext=(8, 5),
+                fontsize=8,
+                color=color,
+            )
 
-    ax.set_xlabel('Time per TTI (ms)')
+    ax.set_xlabel('End-to-end time per TTI (ms)')
     ax.set_ylabel('Average SE (bits/s/Hz)')
     ax.grid(True, alpha=0.3)
 

@@ -185,13 +185,13 @@ class ParallelExperimentRunner:
             progress_callback: Optional callback(completed, total)
 
         Returns:
-            List of result dicts
+            List of result dicts in the same order as `run_specs`
         """
         if not run_specs:
             return []
 
-        results = []
         total = len(run_specs)
+        results: List[Optional[Dict[str, Any]]] = [None] * total
 
         # Prepare arguments for workers (must be picklable)
         work_items = [
@@ -227,20 +227,20 @@ class ParallelExperimentRunner:
                 # Collect results as they complete
                 completed = 0
                 for future in as_completed(futures):
+                    idx = futures[future]
                     try:
                         result = future.result(timeout=self.config.timeout_per_run)
-                        results.append(result)
+                        results[idx] = result
                     except Exception as e:
-                        idx = futures[future]
                         spec = run_specs[idx]
-                        results.append({
+                        results[idx] = {
                             "run_id": spec.run_id,
                             "scenario": spec.scenario,
                             "method": spec.method,
                             "seed": spec.seed,
                             "success": False,
                             "error": str(e),
-                        })
+                        }
 
                     completed += 1
                     if progress_callback:
@@ -254,6 +254,19 @@ class ParallelExperimentRunner:
                     model_paths, extra_cfg_overrides, progress_callback
                 )
             raise
+
+        # Safety: ensure no missing slots
+        for i, r in enumerate(results):
+            if r is None:
+                spec = run_specs[i]
+                results[i] = {
+                    "run_id": spec.run_id,
+                    "scenario": spec.scenario,
+                    "method": spec.method,
+                    "seed": spec.seed,
+                    "success": False,
+                    "error": "Missing result (unexpected worker failure)",
+                }
 
         return results
 

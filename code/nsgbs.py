@@ -141,9 +141,9 @@ class NSGBSScorer:
             t = torch.from_numpy(x).to(self.device)
             if self.mean is not None and self.std is not None:
                 t = (t - self.mean) / self.std
-            mask = torch.ones((t.shape[0], t.shape[1]), dtype=torch.bool, device=self.device)
-            with torch.no_grad():
-                out = self.model(t, mask)
+            # No padding is used; avoid passing an all-ones mask to reduce overhead.
+            with torch.inference_mode():
+                out = self.model(t, mask=None)
                 if self.use_uncertainty and out.shape[-1] >= 2:
                     out = out[..., 0]
                 out = out.squeeze(-1)
@@ -154,7 +154,7 @@ class NSGBSScorer:
             t = torch.from_numpy(x).to(self.device)
             if self.mean is not None and self.std is not None:
                 t = (t - self.mean) / self.std
-            with torch.no_grad():
+            with torch.inference_mode():
                 out = self.model(t).squeeze(-1)
             return out.detach().cpu().numpy()
 

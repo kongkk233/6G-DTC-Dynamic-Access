@@ -103,6 +103,7 @@ def main():
                 for seed in seed_range:
                     params = extra_cfg.copy()
                     params["rm_flicker_db_std"] = flicker
+                    params["doppler_residual_fraction"] = 0.0
                     params["_type"] = "flicker_db_std"
                     params["_value"] = flicker
                     run_specs.append(RunSpec(scenario="default", method=method, seed=seed, extra_params=params))
@@ -159,6 +160,7 @@ def main():
                         cfg["seed"] = seed
                         cfg["show_progress"] = False
                         cfg["rm_flicker_db_std"] = flicker
+                        cfg["doppler_residual_fraction"] = 0.0
 
                         if method == "B1_3GPP":
                             cfg["scheduler_kind"] = "heuristic"
